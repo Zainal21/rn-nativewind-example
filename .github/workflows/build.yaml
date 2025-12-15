@@ -1,0 +1,117 @@
+name: Expo 
+
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        type: string
+        default: ubuntu-latest
+      platform:
+        type: string
+        default: android
+      profile:
+        type: string
+        default: preview
+
+jobs:
+  job:
+    runs-on: ${{ github.event.inputs.os }}
+    timeout-minutes: 30  
+
+    steps:
+      - name: Setup repo
+        uses: actions/checkout@v4
+
+      - name: Setup Act and Env
+        run: |
+          source "./tools.sh"
+          runner "apt-get update >/dev/null 2>&1"
+          runner "apt-get install unzip -y >/dev/null 2>&1"
+          unzip -v
+          runner "apt-get install git -y >/dev/null 2>&1"
+          git --version
+          runner "$(declare -f 'gh_try'); gh_try"
+          gh --version
+
+      - name: Setup Node
+        uses: actions/setup-node@v2
+        with:
+          node-version: '18.x'
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Test Environment
+        env:
+          GH_TOKEN: ${{ secrets.TOKEN }}
+        run: |
+          adb --version
+          node --version
+          java --version
+          gh repo view --json name,url
+
+      - name: Install Dependencies
+        run: |
+          yarn --silent > /dev/null 2>&1
+
+      - name: Run Dummy Tests
+        run: |
+          yarn add --dev jest --silent > /dev/null 2>&1
+          yarn test
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v7
+        with:
+          token: ${{ secrets.EXPO_TOKEN }}
+          eas-version: latest
+          expo-version: latest
+
+      - run: eas whoami
+
+      - name: EAS Init
+        run: |
+          eas init --non-interactive --force
+          [ ! -f eas.json ] && echo '{
+            "build": {
+              "preview": {
+                "developmentClient": false,
+                "distribution": "internal",
+                "android": {
+                  "credentialsSource": "local",
+                  "buildType": "apk"
+                }
+              }
+            }
+          }' > eas.json
+
+      - name: Create Keystore
+        run: |
+          source "./tools.sh"
+          key_create "com.spicytech.test2"
+
+      - name: EAS Local Build
+        run: |
+          EAS_NO_VCS=1 eas build --local \
+            --non-interactive \
+            --output=./app-build.apk \
+            --platform=${{ github.event.inputs.platform }} \
+            --profile=${{ github.event.inputs.profile }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArtifactName
+          path: app-build.apk
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.TOKEN }}
+        run: |
+          source "./tools.sh"
+          release_with_artifact '${{ github.repository }}' '${{ github.actor }}' "XYZ" app-build.apk
